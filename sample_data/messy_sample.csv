@@ -1,0 +1,39 @@
+record_id,employee_name,city,department,hire_date,salary,years_experience,employment_status
+1,Sarah Johnson,Calgary,Analytics,2021-03-15,72000,4,Active
+2,Mike Chen,edmonton,Engineering,2019-07-22,85000,6,Active
+3,Priya Sharma,CALGARY,Finance,2022-01-10,68000,3,Active
+4,James Wilson,Vancouver,Analytics,2020-11-05,78000,5,Active
+5,Fatima Al-Hassan,calgary,HR,,65000,2,Active
+6,David Park,Toronto,Engineering,2018-04-18,92000,8,Active
+7,Lisa Thompson,Edmonton,,2021-08-30,71000,4,Active
+8,Raj Patel,EDMONTON,Analytics,2023-02-14,61000,1,Active
+9,Emma Williams,Calgary,Finance,03/15/2020,74000,,Active
+10,Carlos Rivera,Vancouver,Engineering,2019-12-01,88000,7,Active
+11,Mei Lin,toronto,Analytics,2022-06-19,63000,2,Active
+12,Tom Bradley,CALGARY,HR,2020-09-08,58000,5,Inactive
+13,Aisha Mohamed,Edmonton,Finance,11/22/2021,,3,Active
+14,Ryan O'Brien,Calgary,Engineering,2017-03-27,999999,9,Active
+15,Nicole Tremblay,VANCOUVER,Analytics,2023-05-12,62000,1,Active
+16,Kevin Nakamura,calgary,Finance,Jan 15 2022,75000,4,Active
+17,Sandra Lee,Toronto,Engineering,2021-10-25,89000,6,Active
+18,Omar Hassan,Edmonton,Analytics,2020-07-14,69000,,Active
+19,Julia Martin,TORONTO,HR,2019-02-03,56000,5,Inactive
+20,Ben Kowalski,Calgary,,2022-03-28,70000,3,Active
+21,Ananya Singh,vancouver,Finance,2021-11-09,77000,5,Active
+22,Marcus Johnson,EDMONTON,Engineering,08/16/2018,94000,8,Active
+23,Chloe Bouchard,Calgary,Analytics,2023-09-01,59000,,Active
+24,Ahmed Khalil,Edmonton,Finance,2020-04-22,73000,4,Active
+25,Rachel Kim,CALGARY,Engineering,2019-08-15,87000,7,Active
+26,Patrick Murphy,Toronto,Analytics,Feb 28 2022,64000,2,Active
+27,Yuki Tanaka,calgary,HR,2021-06-30,57000,4,Active
+28,Isabelle Dupont,Vancouver,Finance,2018-10-12,79000,8,Active
+29,Daniel Wright,Edmonton,Engineering,2023-01-19,-5000,1,Active
+30,Zara Ahmed,TORONTO,,2022-07-05,66000,,Active
+31,Chris Anderson,Calgary,Analytics,2020-12-14,71000,5,Active
+32,Fatima Al-Hassan,calgary,HR,,65000,2,Active
+33,Mike Chen,edmonton,Engineering,2019-07-22,85000,6,Active
+34,Fatima Al-Hassan,calgary,HR,,65000,2,Active
+35,Hannah Johansson,VANCOUVER,Finance,2021-04-18,76000,4,Active
+36,Jamal Stewart,Edmonton,Engineering,2018-09-23,91000,9,Active
+37,Sophie Leclerc,calgary,Analytics,2023-08-07,60000,1,Active
+38,Liam O'Connor,CALGARY,HR,2020-05-16,59000,3,Inactive
