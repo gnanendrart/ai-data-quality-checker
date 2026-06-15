@@ -1,6 +1,6 @@
 """
 Phase 3: Data quality profiler.
-Runs 8 quality checks and returns structured findings as a dict.
+Runs quality checks and returns structured findings as a dict.
 
 Usage:
     from src.loader import load_csv
@@ -13,6 +13,9 @@ Usage:
 """
 
 import logging
+import re
+import unicodedata
+
 import pandas as pd
 import numpy as np
 
@@ -23,25 +26,25 @@ def profile(df: pd.DataFrame) -> dict:
     """
     Run all quality checks on a DataFrame.
 
-    Args:
-        df: Input DataFrame to profile.
-
     Returns:
-        dict with keys: shape, missing, duplicates, dtypes, cardinality,
-        outliers, string_consistency, date_issues, summary_stats.
+        dict with keys: shape, column_name_issues, missing, duplicates, dtypes,
+        cardinality, outliers, string_consistency, date_issues,
+        primary_key_candidates, summary_stats.
     """
     logger.info(f"Profiling DataFrame: {df.shape[0]} rows x {df.shape[1]} columns")
 
     result = {
-        "shape":              _check_shape(df),
-        "missing":            _check_missing(df),
-        "duplicates":         _check_duplicates(df),
-        "dtypes":             _check_dtypes(df),
-        "cardinality":        _check_cardinality(df),
-        "outliers":           _check_outliers(df),
-        "string_consistency": _check_string_consistency(df),
-        "date_issues":        _check_date_issues(df),
-        "summary_stats":      _check_summary_stats(df),
+        "shape":                _check_shape(df),
+        "column_name_issues":   _check_column_names(df),
+        "missing":              _check_missing(df),
+        "duplicates":           _check_duplicates(df),
+        "dtypes":               _check_dtypes(df),
+        "cardinality":          _check_cardinality(df),
+        "outliers":             _check_outliers(df),
+        "string_consistency":   _check_string_consistency(df),
+        "date_issues":          _check_date_issues(df),
+        "primary_key_violations": _check_primary_key_violations(df),
+        "summary_stats":        _check_summary_stats(df),
     }
 
     logger.info("Profiling complete.")
@@ -54,6 +57,33 @@ def profile(df: pd.DataFrame) -> dict:
 
 def _check_shape(df: pd.DataFrame) -> dict:
     return {"rows": int(df.shape[0]), "columns": int(df.shape[1])}
+
+
+def _check_column_names(df: pd.DataFrame) -> dict:
+    """
+    Flag column names with non-standard characters:
+    - Non-breaking spaces or other Unicode whitespace (\\u00a0, \\u2009, etc.)
+    - Leading/trailing whitespace
+    - Non-ASCII characters that are not intentional (e.g. curly quotes in headers)
+    """
+    findings = {}
+    for col in df.columns:
+        issues = []
+
+        # Check for non-standard whitespace (non-breaking space etc.)
+        for i, ch in enumerate(col):
+            if unicodedata.category(ch) in ("Zs",) and ch != " ":
+                issues.append(f"non-standard whitespace at position {i} (U+{ord(ch):04X})")
+                break
+
+        # Check for leading/trailing whitespace
+        if col != col.strip():
+            issues.append("leading/trailing whitespace")
+
+        if issues:
+            findings[col] = {"issues": issues}
+
+    return findings
 
 
 def _check_missing(df: pd.DataFrame) -> dict:
@@ -69,7 +99,6 @@ def _check_missing(df: pd.DataFrame) -> dict:
 
 def _check_duplicates(df: pd.DataFrame) -> dict:
     """Count of exact duplicate rows and up to 3 examples."""
-    # duplicated() marks second+ occurrences; keep=False marks all copies
     count = int(df.duplicated().sum())
 
     examples = []
@@ -82,21 +111,49 @@ def _check_duplicates(df: pd.DataFrame) -> dict:
 
 def _check_dtypes(df: pd.DataFrame) -> dict:
     """
-    Flag object columns whose values are mostly numeric.
-    A column is 'looks_numeric' if >= 80% of non-null values parse as numbers.
+    Flag object columns whose values are mostly numeric OR look like currency.
+
+    Three sub-checks for each object column:
+    - looks_numeric: >= 80% of non-null values parse as numbers as-is
+    - looks_currency: >= 80% of non-null values parse as numbers after stripping
+      $, £, €, ¥ prefixes and comma separators (e.g. "$1,234,567")
+    - has_citation_artifacts: values contain embedded bracketed references like [1]
+      (common in data scraped from Wikipedia or similar sources)
     """
     findings = {}
+    citation_pattern = re.compile(r"\[\d+\]")
+
     for col in df.select_dtypes(include=object).columns:
         non_null = df[col].dropna()
         if len(non_null) == 0:
             continue
+
+        # Standard numeric check
         converted = pd.to_numeric(non_null, errors="coerce")
         numeric_rate = float(converted.notna().mean())
         looks_numeric = numeric_rate >= 0.8
-        findings[col] = {
+
+        # Currency check: strip leading currency symbols and commas, then retry
+        stripped = non_null.str.replace(r"^[$£€¥]", "", regex=True).str.replace(",", "", regex=False)
+        converted_stripped = pd.to_numeric(stripped, errors="coerce")
+        currency_rate = float(converted_stripped.notna().mean())
+        looks_currency = (not looks_numeric) and (currency_rate >= 0.8)
+
+        # Citation artifact check: values contain embedded [n] references
+        has_citations = bool(non_null.astype(str).str.contains(citation_pattern).any())
+
+        entry: dict = {
             "actual": "object",
             "looks_numeric": looks_numeric,
         }
+        if looks_currency:
+            entry["looks_currency"] = True
+            entry["currency_parse_rate"] = round(currency_rate * 100, 1)
+        if has_citations:
+            entry["has_citation_artifacts"] = True
+
+        findings[col] = entry
+
     return findings
 
 
@@ -116,14 +173,8 @@ def _check_cardinality(df: pd.DataFrame) -> dict:
 
 def _check_outliers(df: pd.DataFrame) -> dict:
     """
-    For numeric columns: flag outliers using two methods and take the union.
-
-    - Z-score (3 SD): catches outliers when the distribution is roughly normal.
-    - IQR (1.5x fence): robust against extreme values that inflate the SD,
-      which causes the 3-SD rule to miss moderate outliers on the other end.
-
-    Using both ensures a single extreme value (e.g. 999999) doesn't mask
-    a second outlier (e.g. -5000) by inflating the standard deviation.
+    For numeric columns: flag outliers using Z-score (3 SD) and IQR (1.5x fence).
+    Takes the union so a single extreme value doesn't mask others.
     """
     findings = {}
     for col in df.select_dtypes(include=np.number).columns:
@@ -162,7 +213,7 @@ def _check_outliers(df: pd.DataFrame) -> dict:
 def _check_string_consistency(df: pd.DataFrame) -> dict:
     """
     For string columns:
-    - mixed_case: same value appears with different casings (e.g. Calgary/calgary/CALGARY)
+    - mixed_case: same value appears with different casings
     - has_whitespace: any value has leading or trailing whitespace
     Only reports columns where at least one issue is found.
     """
@@ -172,7 +223,6 @@ def _check_string_consistency(df: pd.DataFrame) -> dict:
         if len(series) == 0:
             continue
 
-        # Build a map from lowercased value -> set of original casings
         lower_to_originals: dict[str, set] = {}
         for val in series.unique():
             lower_to_originals.setdefault(val.lower(), set()).add(val)
@@ -190,17 +240,31 @@ def _check_string_consistency(df: pd.DataFrame) -> dict:
 
 def _check_date_issues(df: pd.DataFrame) -> dict:
     """
-    For columns whose name contains 'date':
+    For columns whose name contains 'date', 'year', 'time', 'dob', 'created', 'updated':
     - parse_failures: values that cannot be parsed as dates at all
     - mixed_formats: column contains both ISO (YYYY-MM-DD) and non-ISO formats
     """
+    DATE_KEYWORDS = ("date", "year", "time", "dob", "created", "updated")
     findings = {}
-    date_cols = [col for col in df.columns if "date" in col.lower()]
+    date_cols = [
+        col for col in df.columns
+        if any(kw in col.lower() for kw in DATE_KEYWORDS)
+    ]
 
     for col in date_cols:
-        series = df[col].dropna().astype(str)
+        series = df[col].dropna()
         if len(series) == 0:
             continue
+
+        # Skip columns that are already numeric — e.g. 'years_experience' matches
+        # the 'year' keyword but contains integers, not dates.
+        if pd.api.types.is_numeric_dtype(series):
+            continue
+        numeric_rate = pd.to_numeric(series.astype(str), errors='coerce').notna().mean()
+        if numeric_rate >= 0.8:
+            continue
+
+        series = series.astype(str)
 
         # Count hard parse failures
         failures = 0
@@ -213,7 +277,6 @@ def _check_date_issues(df: pd.DataFrame) -> dict:
         # Detect mixed formats: try strict ISO, count how many don't match
         iso_parsed = pd.to_datetime(series, format="%Y-%m-%d", errors="coerce")
         non_iso_count = int(iso_parsed.isna().sum())
-        # mixed_formats = some values ARE ISO and some are NOT
         mixed_formats = 0 < non_iso_count < len(series)
 
         if failures > 0 or mixed_formats:
@@ -224,6 +287,36 @@ def _check_date_issues(df: pd.DataFrame) -> dict:
                 entry["mixed_formats"] = True
                 entry["non_iso_count"] = non_iso_count
             findings[col] = entry
+
+    return findings
+
+
+def _check_primary_key_violations(df: pd.DataFrame) -> dict:
+    """
+    Identify columns that look like identifiers (named 'id', 'rank', 'key', 'code',
+    or ending with '_id') and check for duplicate values within them.
+    Reports the duplicate values and their counts.
+    """
+    ID_KEYWORDS = ("id", "rank", "key", "code", "no", "num", "number", "index")
+    findings = {}
+
+    candidate_cols = [
+        col for col in df.columns
+        if any(kw == col.lower() or col.lower().endswith(f"_{kw}") or col.lower().startswith(f"{kw}_")
+               for kw in ID_KEYWORDS)
+    ]
+
+    for col in candidate_cols:
+        series = df[col].dropna()
+        if len(series) == 0:
+            continue
+        duplicated = series[series.duplicated(keep=False)]
+        if len(duplicated) > 0:
+            dup_values = duplicated.value_counts().to_dict()
+            findings[col] = {
+                "duplicate_count": int(len(duplicated)),
+                "duplicate_values": {str(k): int(v) for k, v in dup_values.items()},
+            }
 
     return findings
 
@@ -258,7 +351,6 @@ if __name__ == "__main__":
         format="%(asctime)s [%(levelname)s] %(message)s"
     )
 
-    # Allow running from either project root or src/
     csv_path = "sample_data/messy_sample.csv"
     if not os.path.exists(csv_path):
         csv_path = "../sample_data/messy_sample.csv"
@@ -271,7 +363,6 @@ if __name__ == "__main__":
 
     print(json.dumps(result, indent=2, default=str))
 
-    # Verify all 5 deliberate issues are caught
     print("\n--- Checkpoint Verification ---")
     assert result["missing"],                                    "FAIL: missing values not detected"
     assert result["duplicates"]["count"] >= 3,                   "FAIL: fewer than 3 duplicates detected"

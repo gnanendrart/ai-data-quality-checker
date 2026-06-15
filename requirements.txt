@@ -1,3 +1,4 @@
 anthropic
 pandas
+numpy
 python-dotenv

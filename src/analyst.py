@@ -1,16 +1,6 @@
 """
 Phase 4: Claude analyst.
 Sends profiler findings to Claude and returns a plain-English interpretation.
-
-Usage:
-    from src.loader import load_csv
-    from src.profiler import profile
-    from src.analyst import interpret
-
-    df = load_csv("sample_data/messy_sample.csv")
-    findings = profile(df)
-    analysis = interpret(findings, "messy_sample.csv")
-    print(analysis)
 """
 
 import json
@@ -53,6 +43,16 @@ def _build_prompt(profile_dict: dict, filename: str) -> str:
         "",
     ]
 
+    # Column name issues
+    col_name_issues = profile_dict.get("column_name_issues", {})
+    if col_name_issues:
+        sections.append("COLUMN NAME ISSUES:")
+        for col, info in col_name_issues.items():
+            sections.append(f"  '{col}': {'; '.join(info['issues'])}")
+    else:
+        sections.append("COLUMN NAME ISSUES: None detected")
+    sections.append("")
+
     # Missing values
     missing = profile_dict.get("missing", {})
     if missing:
@@ -77,13 +77,39 @@ def _build_prompt(profile_dict: dict, filename: str) -> str:
 
     # Data type issues
     dtypes = profile_dict.get("dtypes", {})
-    looks_numeric = {col: v for col, v in dtypes.items() if v.get("looks_numeric")}
-    if looks_numeric:
-        sections.append("DATA TYPE ISSUES (object columns that appear numeric):")
-        for col in looks_numeric:
-            sections.append(f"  {col}: stored as text, values look numeric")
+    flagged = {
+        col: v for col, v in dtypes.items()
+        if v.get("looks_numeric") or v.get("looks_currency") or v.get("has_citation_artifacts")
+    }
+    if flagged:
+        sections.append("DATA TYPE / CONTENT ISSUES:")
+        for col, v in flagged.items():
+            parts = []
+            if v.get("looks_numeric"):
+                parts.append("stored as text, values look numeric")
+            if v.get("looks_currency"):
+                parts.append(
+                    f"stored as text, values look like currency "
+                    f"({v.get('currency_parse_rate', '?')}% parseable after stripping symbols)"
+                )
+            if v.get("has_citation_artifacts"):
+                parts.append("contains embedded citation references (e.g. [1], [2]) — likely scraped data")
+            sections.append(f"  {col}: {'; '.join(parts)}")
     else:
         sections.append("DATA TYPE ISSUES: None detected")
+    sections.append("")
+
+    # Primary key violations
+    pk_violations = profile_dict.get("primary_key_violations", {})
+    if pk_violations:
+        sections.append("PRIMARY KEY / IDENTIFIER VIOLATIONS:")
+        for col, stats in pk_violations.items():
+            vals = ", ".join(f"{k} (×{v})" for k, v in stats["duplicate_values"].items())
+            sections.append(
+                f"  {col}: {stats['duplicate_count']} rows share duplicate values — {vals}"
+            )
+    else:
+        sections.append("PRIMARY KEY VIOLATIONS: None detected")
     sections.append("")
 
     # Outliers
@@ -130,13 +156,13 @@ def _build_prompt(profile_dict: dict, filename: str) -> str:
         sections.append("DATE FORMAT ISSUES: None detected")
     sections.append("")
 
-    # Summary stats (include only to give Claude context on numeric ranges)
+    # Summary stats
     stats = profile_dict.get("summary_stats", {})
     if stats:
         sections.append("NUMERIC COLUMN RANGES:")
         for col, s in stats.items():
-            if col == "record_id":
-                continue  # not analytically interesting
+            if col.lower() in ("record_id", "rank", "id"):
+                continue
             sections.append(
                 f"  {col}: min={s['min']}, max={s['max']}, "
                 f"mean={s['mean']}, median={s['median']}"
@@ -148,13 +174,6 @@ def _build_prompt(profile_dict: dict, filename: str) -> str:
 def interpret(profile_dict: dict, filename: str) -> str:
     """
     Send profiler findings to Claude and return a plain-English interpretation.
-
-    Args:
-        profile_dict: Output from profiler.profile().
-        filename: Name of the source CSV file (used for context in the prompt).
-
-    Returns:
-        String containing the analyst assessment from Claude.
     """
     load_dotenv()
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -182,36 +201,3 @@ def interpret(profile_dict: dict, filename: str) -> str:
     response = message.content[0].text
     logger.info("Analysis received from Claude.")
     return response
-
-
-# ---------------------------------------------------------------------------
-# Smoke test
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import sys
-    import os
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
-    )
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from src.loader import load_csv
-    from src.profiler import profile
-
-    csv_path = "sample_data/messy_sample.csv"
-    if not os.path.exists(csv_path):
-        csv_path = "../sample_data/messy_sample.csv"
-
-    df = load_csv(csv_path)
-    findings = profile(df)
-    analysis = interpret(findings, "messy_sample.csv")
-
-    print("\n" + "=" * 60)
-    print(analysis)
-    print("=" * 60 + "\n")
-    print("Phase 4 checkpoint: read the output above.")
-    print("Does it sound like a real analyst? Is the prioritization correct?")
-    print("(Worst issues first, not just a restatement of the numbers)")
